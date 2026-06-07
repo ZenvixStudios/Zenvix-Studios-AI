@@ -1,0 +1,129 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 1. User collection
+    match /test/connection {
+      allow read: if true;
+    }
+
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.keys().hasAll(['username', 'isPremium']) &&
+               data.username is string && data.username.size() >= 1 && data.username.size() <= 100 &&
+               data.isPremium is bool &&
+               (!('createdAt' in data) || data.createdAt is timestamp) &&
+               (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2000000)) &&
+               (!('imageCount' in data) || data.imageCount is int) &&
+               (!('lastImageGenerationAt' in data) || (data.lastImageGenerationAt is timestamp || data.lastImageGenerationAt == null)) &&
+               (!('experienceMode' in data) || (data.experienceMode in ['freemium', 'premium-preview'])) &&
+               (!('betaAnalytics' in data) || (
+                 data.betaAnalytics is map &&
+                 (!('modeSelectFreemiumCount' in data.betaAnalytics) || data.betaAnalytics.modeSelectFreemiumCount is int) &&
+                 (!('modeSelectPremiumPreviewCount' in data.betaAnalytics) || data.betaAnalytics.modeSelectPremiumPreviewCount is int) &&
+                 (!('featureUses' in data.betaAnalytics) || (
+                   data.betaAnalytics.featureUses is map &&
+                   (!('aiResponses' in data.betaAnalytics.featureUses) || data.betaAnalytics.featureUses.aiResponses is int) &&
+                   (!('businessReports' in data.betaAnalytics.featureUses) || data.betaAnalytics.featureUses.businessReports is int) &&
+                   (!('diagrams' in data.betaAnalytics.featureUses) || data.betaAnalytics.featureUses.diagrams is int) &&
+                   (!('pdfDownloads' in data.betaAnalytics.featureUses) || data.betaAnalytics.featureUses.pdfDownloads is int) &&
+                   (!('deepResearch' in data.betaAnalytics.featureUses) || data.betaAnalytics.featureUses.deepResearch is int) &&
+                   (!('visualExplanations' in data.betaAnalytics.featureUses) || data.betaAnalytics.featureUses.visualExplanations is int)
+                 ))
+               )) &&
+               (!('premiumTrials' in data) || (
+                 data.premiumTrials is map &&
+                 (!('aiResponses' in data.premiumTrials) || data.premiumTrials.aiResponses is int) &&
+                 (!('businessReports' in data.premiumTrials) || data.premiumTrials.businessReports is int) &&
+                 (!('diagrams' in data.premiumTrials) || data.premiumTrials.diagrams is int) &&
+                 (!('pdfDownloads' in data.premiumTrials) || data.premiumTrials.pdfDownloads is int) &&
+                 (!('deepResearch' in data.premiumTrials) || data.premiumTrials.deepResearch is int) &&
+                 (!('visualExplanations' in data.premiumTrials) || data.premiumTrials.visualExplanations is int) &&
+                 (!('lastResetAt' in data.premiumTrials) || (data.premiumTrials.lastResetAt is int || data.premiumTrials.lastResetAt is float))
+               )) &&
+               (!('onboardingPreference' in data) || (
+                 data.onboardingPreference is map &&
+                 (!('language' in data.onboardingPreference) || data.onboardingPreference.language is string) &&
+                 (!('completed' in data.onboardingPreference) || data.onboardingPreference.completed is bool)
+               ));
+      }
+
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().isPremium == false && ('createdAt' in incoming()) && incoming().createdAt is timestamp;
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    (
+                      // Allow changing profile fields
+                      incoming().diff(existing()).affectedKeys().hasOnly([
+                        'username', 'photoURL', 'isPremium', 'imageCount', 'lastImageGenerationAt', 'premiumTrials', 'onboardingPreference', 'createdAt', 'experienceMode', 'betaAnalytics'
+                      ])
+                    );
+    }
+
+    // 2. Chats collection
+    match /chats/{chatId} {
+      function isValidChat(data) {
+        return data.keys().hasAll(['userId', 'title', 'mode', 'lastMessageAt']) &&
+               data.userId == request.auth.uid &&
+               data.title is string && data.title.size() <= 100 &&
+               data.mode in ['student', 'creator', 'business', 'image-lab'] &&
+               data.lastMessageAt is timestamp;
+      }
+
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidChat(incoming());
+      allow update: if isSignedIn() && existing().userId == request.auth.uid && (
+        // Action: Update timestamp (used when adding messages)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageAt']) && incoming().lastMessageAt is timestamp) ||
+        // Action: General update
+        (isValidChat(incoming()) && incoming().userId == existing().userId && 
+         incoming().mode == existing().mode &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'lastMessageAt']))
+      );
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // 3. Messages collection (subcollection of chats)
+    match /chats/{chatId}/messages/{messageId} {
+      function isChatOwner() {
+        return get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
+      }
+
+      function isValidMessage(data) {
+        return data.keys().hasAll(['text', 'sender', 'createdAt']) &&
+               data.text is string && 
+               data.sender in ['user', 'ai'] &&
+               data.createdAt is timestamp &&
+               (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000000)); // Increased to 2MB for safety
+      }
+
+      allow list, get: if isSignedIn() && isChatOwner();
+      allow create: if isSignedIn() && isChatOwner() && isValidMessage(incoming());
+    }
+  }
+}

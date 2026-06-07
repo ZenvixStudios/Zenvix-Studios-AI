@@ -1,0 +1,97 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and settings",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "description": "Custom chosen username" },
+        "isPremium": { "type": "boolean", "description": "Subscription status" },
+        "imageCount": { "type": "integer", "description": "Number of images generated" },
+        "lastImageGenerationAt": { "type": "string", "format": "date-time", "description": "Timestamp of the last image generation" },
+        "premiumTrials": {
+          "type": "object",
+          "description": "Premium trial balances and last reset timestamp",
+          "properties": {
+            "aiResponses": { "type": "integer" },
+            "businessReports": { "type": "integer" },
+            "diagrams": { "type": "integer" },
+            "pdfDownloads": { "type": "integer" },
+            "deepResearch": { "type": "integer" },
+            "visualExplanations": { "type": "integer" },
+            "lastResetAt": { "type": "integer" }
+          },
+          "required": ["aiResponses", "businessReports", "diagrams", "pdfDownloads", "deepResearch", "visualExplanations", "lastResetAt"]
+        },
+        "onboardingPreference": {
+          "type": "object",
+          "properties": {
+            "language": { "type": "string" },
+            "completed": { "type": "boolean" }
+          }
+        },
+        "photoURL": { "type": "string", "description": "Profile picture URL" },
+        "experienceMode": { "type": "string", "enum": ["freemium", "premium-preview"], "description": "AI Experience switch for pre-launch" },
+        "betaAnalytics": {
+          "type": "object",
+          "description": "Beta testing feature use tracking tracking",
+          "properties": {
+            "modeSelectFreemiumCount": { "type": "integer" },
+            "modeSelectPremiumPreviewCount": { "type": "integer" },
+            "featureUses": {
+              "type": "object",
+              "properties": {
+                "aiResponses": { "type": "integer" },
+                "businessReports": { "type": "integer" },
+                "diagrams": { "type": "integer" },
+                "pdfDownloads": { "type": "integer" },
+                "deepResearch": { "type": "integer" },
+                "visualExplanations": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "isPremium", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A conversation session",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "mode": { "enum": ["student", "creator", "business", "image-lab"] },
+        "lastMessageAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "mode"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Individual message in a chat",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "sender": { "enum": ["user", "ai"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "sender", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Root user profiles"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "User chats"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages within a specific chat"
+    }
+  }
+}
