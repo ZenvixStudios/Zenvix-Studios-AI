@@ -101,7 +101,7 @@ const MessageBubbleComponent = ({
           <ReactMarkdown>{msg.text}</ReactMarkdown>
         </div>
         
-        {msg.sender === 'ai' && isEducationalContent(msg.text) && (
+        {msg.sender === 'ai' && false && isEducationalContent(msg.text) && (
           <div className="mt-4 pt-4 border-t border-black/5 dark:border-white/5">
             {!requestedPdfs.has(msg.id) ? (
               <div className="flex flex-col gap-2">

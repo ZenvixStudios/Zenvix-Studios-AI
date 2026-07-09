@@ -733,8 +733,50 @@ export default function ChatScreen({
         console.error("Failed to save AI response to Firestore", err);
       }
       console.log("AI RESPONSE RECEIVED AND SAVED");
-    } catch (e) {
+    } catch (e: any) {
       console.error("AI RESPONSE ERROR:", e);
+      
+      const errMsg = e.message || "";
+      const isQuotaError = errMsg.includes("quota") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("429");
+      const isPermissionError = errMsg.includes("permission") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("403");
+      const isImageModel = errMsg.includes("gemini-3.1-flash-image") || errMsg.includes("image");
+      
+      let errorText = "### ⚠️ Service Connection Error\n\nAn unexpected error occurred while communicating with the AI platform. Please check your internet connection and try again.";
+      
+      if (isQuotaError) {
+        if (isImageModel) {
+          errorText = `### ⚠️ Premium Visual Key Required\n\nThe premium visual generation engine (**gemini-3.1-flash-image**) requires a **Paid-tier Gemini API key** with active billing. On the free tier, image generation has a limit of 0.\n\n**To resolve this:**\n1. **Use Text Features**: Standard text queries (Student, Creator, Business) continue to work normally on the free tier.\n2. **Upgrade Key**: Enable billing inside your Google AI Studio project to gain paid visual generation quota.\n3. **Switch Mode**: Set your mode to Student, Creator, or Business and ask standard text questions.`;
+        } else {
+          errorText = `### ⚠️ Quota Exceeded (429)\n\nYou have temporarily exceeded your Gemini API rate limit or daily token quota.\n\n**To resolve this:**\n- Wait a minute before sending another query.\n- Check your quota limits in the Google AI Studio console.`;
+        }
+      } else if (isPermissionError) {
+        errorText = `### ⚠️ API Key Access Denied (403)\n\nYour Gemini API key does not have permission to access the selected model (**${isImageModel ? "gemini-3.1-flash-image" : "gemini-3.5-flash"}**).\n\n**To resolve this:**\n- Verify your API key is correctly entered in the platform secrets settings.\n- Ensure the key has not been deleted or restricted in Google AI Studio.`;
+      } else if (errMsg) {
+        errorText = `### ⚠️ Gemini API Request Failed\n\n${errMsg}`;
+      }
+
+      const errorMsg: Message = {
+        id: 'local_ai_err_' + Date.now(),
+        text: errorText,
+        sender: 'ai',
+        createdAt: Date.now() as any
+      };
+
+      const finalMsgs = [...updatedUserMsgs, errorMsg];
+      setMessages(finalMsgs);
+      debouncedSaveLocal(user.uid, chats, chatId, finalMsgs);
+      
+      try {
+        await addDoc(collection(db, `chats/${chatId}/messages`), {
+          text: errorMsg.text,
+          sender: 'ai',
+          createdAt: serverTimestamp()
+        });
+        await updateDoc(doc(db, 'chats', chatId), { lastMessageAt: serverTimestamp() });
+      } catch (err) {
+        console.error("Failed to save error message to Firestore", err);
+      }
+      console.log("AI RESPONSE ERROR VISUALIZED AND SAVED");
     } finally {
       setIsTyping(false);
       setIsGeneratingImage(false);
@@ -1039,17 +1081,14 @@ export default function ChatScreen({
                     onClick={() => handleNewChat(m)}
                     className="p-5 ring-1 ring-purple-accent/20 hover:ring-purple-accent bg-purple-accent/5 rounded-2xl flex items-center gap-4 group transition-all relative overflow-hidden"
                   >
-                    {!profile.isPremium && m === 'image-lab' && (
-                      <div className="absolute top-0 right-0 bg-yellow-400 text-[8px] font-black px-2 py-0.5 rounded-bl-lg uppercase text-black">
-                        Limited 🔒
-                      </div>
-                    )}
                     <div className="w-12 h-12 rounded-xl bg-purple-accent/20 flex items-center justify-center text-purple-accent group-hover:scale-110 transition-transform">
                       {m === 'student' ? <BookOpen/> : m === 'creator' ? <Layout/> : m === 'business' ? <Briefcase/> : <ImageIcon/>}
                     </div>
                     <div className="text-left">
                       <p className="font-bold capitalize">{m.replace('-', ' ')} Mode</p>
-                      <p className="text-[10px] opacity-50 uppercase tracking-widest leading-none mt-1">Smart Assistance</p>
+                      <p className="text-[10px] opacity-50 uppercase tracking-widest leading-none mt-1">
+                        {m === 'image-lab' ? 'Visual Lab' : 'Smart Assistance'}
+                      </p>
                     </div>
                   </button>
                 ))}
@@ -1115,59 +1154,7 @@ export default function ChatScreen({
                 </div>
               </div>
 
-              <div className="space-y-4 mb-6">
-                <p className="text-[10px] font-black opacity-50 uppercase tracking-widest text-center">AI Experience Mode</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button 
-                    onClick={async () => {
-                      await trackModeSelect('freemium');
-                    }}
-                    className={cn(
-                      "flex flex-col items-center justify-center p-4 rounded-2xl text-center border transition-all active:scale-95",
-                      (profile.experienceMode || 'freemium') === 'freemium'
-                        ? "bg-purple-accent/10 border-purple-accent text-purple-accent font-extrabold shadow-sm"
-                        : "bg-black/5 dark:bg-white/5 border-transparent opacity-60 hover:opacity-100"
-                    )}
-                  >
-                    <span className="text-lg mb-1">🆓</span>
-                    <span className="text-[10px] uppercase tracking-wider font-extrabold block">Freemium</span>
-                    <span className="text-[8px] opacity-60 block mt-0.5">Future Free</span>
-                  </button>
-
-                  <button 
-                    onClick={async () => {
-                      await trackModeSelect('premium-preview');
-                    }}
-                    className={cn(
-                      "flex flex-col items-center justify-center p-4 rounded-2xl text-center border transition-all active:scale-95",
-                      profile.experienceMode === 'premium-preview'
-                        ? "bg-yellow-400/10 border-yellow-400/50 text-yellow-500 font-extrabold shadow-sm"
-                        : "bg-black/5 dark:bg-white/5 border-transparent opacity-60 hover:opacity-100"
-                    )}
-                  >
-                    <span className="text-lg mb-1">👑</span>
-                    <span className="text-[10px] uppercase tracking-wider font-extrabold block">Premium Preview</span>
-                    <span className="text-[8px] opacity-60 block mt-0.5">3 Quotas / Day</span>
-                  </button>
-                </div>
-
-                {profile.experienceMode === 'premium-preview' && (
-                  <div className="bg-yellow-400/5 border border-yellow-400/20 rounded-2xl p-4 text-left animate-fade-in">
-                    <p className="text-[10px] font-black text-yellow-500 uppercase tracking-wider flex items-center gap-1.5 mb-2">
-                      <Crown className="w-3.5 h-3.5 text-yellow-500 fill-current" />
-                      Daily Trials Remaining:
-                    </p>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[9px] font-mono opacity-80">
-                      <div>AI Chats: {profile.premiumTrials?.aiResponses ?? 3}/3</div>
-                      <div>Reports: {profile.premiumTrials?.businessReports ?? 3}/3</div>
-                      <div>Diagrams: {profile.premiumTrials?.diagrams ?? 3}/3</div>
-                      <div>PDFs: {profile.premiumTrials?.pdfDownloads ?? 3}/3</div>
-                      <div>Research: {profile.premiumTrials?.deepResearch ?? 3}/3</div>
-                      <div>Learning: {profile.premiumTrials?.visualExplanations ?? 3}/3</div>
-                    </div>
-                  </div>
-                )}
-              </div>
+               {/* Hidden AI Experience Mode in Version 1.0 */}
 
               <div className="space-y-4">
                 <div className="flex justify-center gap-4">
@@ -1220,14 +1207,12 @@ export default function ChatScreen({
             {isDarkMode ? 'Light Surface' : 'Dark Interface'}
           </button>
           <div onClick={() => setShowProfileModal(true)} className="w-full h-14 glass-card flex items-center gap-3 px-3 cursor-pointer group transition-all border-none relative overflow-hidden">
-            {profile.experienceMode === 'premium-preview' && <div className="absolute top-0 right-0 w-8 h-8 bg-yellow-400/20 rounded-bl-xl flex items-center justify-center"><Crown className="w-3 h-3 text-yellow-500 fill-current" /></div>}
             <img src={profile.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.username}`} className="w-9 h-9 rounded-full border-2 border-purple-accent" alt=""/>
             <div className="flex-1 min-w-0">
                <p className="text-sm font-bold truncate flex items-center gap-1.5">
                 {profile.username}
-                {profile.experienceMode === 'premium-preview' && <span className="text-[10px]">💎</span>}
                </p>
-               <p className="text-[9px] opacity-40 uppercase font-bold tracking-widest">{profile.experienceMode === 'premium-preview' ? 'Premium Preview' : 'Freemium Mode'}</p>
+               <p className="text-[9px] opacity-40 uppercase font-bold tracking-widest">My Profile</p>
             </div>
             <Settings className="w-4 h-4 opacity-40 group-hover:rotate-45 transition-transform" />
           </div>
@@ -1235,29 +1220,7 @@ export default function ChatScreen({
       </div>
 
       <div className="flex-1 flex flex-col h-full relative z-10 transition-colors">
-        {/* Fixed Top Center Experience Mode Indicator */}
-        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-[40] md:flex hidden animate-pulse">
-            <button 
-              onClick={() => setShowProfileModal(true)} 
-              className={cn(
-                  "pointer-events-auto px-5 py-2.5 rounded-full text-white font-bold text-xs shadow-2xl transition-all border active:scale-95 flex items-center justify-center gap-2 hover:scale-105",
-                  profile.experienceMode === 'premium-preview' 
-                    ? "bg-yellow-500/20 border-yellow-400/30 text-yellow-300" 
-                    : "bg-purple-500/10 border-purple-500/20 text-purple-200"
-              )}
-            >
-              {profile.experienceMode === 'premium-preview' ? (
-                <>
-                  <Crown className="w-3.5 h-3.5 text-yellow-500 fill-current" />
-                  <span>👑 Premium Preview Active</span>
-                </>
-              ) : (
-                <>
-                  <span>🆓 Freemium Mode Active</span>
-                </>
-              )}
-            </button>
-        </div>
+        {/* Fixed Top Center Experience Mode Indicator Hidden in Version 1.0 */}
 
         {/* Mobile Header */}
         <div className="h-16 flex items-center justify-between px-4 sticky top-0 bg-transparent z-20">
@@ -1266,7 +1229,6 @@ export default function ChatScreen({
             <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setShowUsername(!showUsername)}>
                <div className="relative">
                  <img src={profile.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profile.username}`} className="w-10 h-10 rounded-full border-[2.5px] border-purple-accent p-0.5 shadow-xl bg-black/5 dark:bg-white/5" alt=""/>
-                 {profile.experienceMode === 'premium-preview' && <Crown className="absolute -top-1 -right-1 w-4 h-4 text-yellow-400 fill-current" />}
                </div>
                <div className="flex flex-col items-start -space-y-0.5">
                 <AnimatePresence>
@@ -1274,27 +1236,11 @@ export default function ChatScreen({
                       <motion.span initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="text-sm font-bold tracking-tight">{profile.username}</motion.span>
                   )}
                 </AnimatePresence>
-                {currentMode === 'image-lab' && profile.experienceMode !== 'premium-preview' && (
-                   <span className="text-[9px] font-black text-purple-accent uppercase tracking-widest">Images: {profile.imageCount || 0}/3</span>
-                )}
                </div>
             </div>
           </div>
           
-          {/* Mobile Center Premium Switch Display */}
-          <button 
-            onClick={() => setShowProfileModal(true)} 
-            className={cn(
-                "md:hidden p-2 rounded-full text-white shadow-lg active:scale-95",
-                profile.experienceMode === 'premium-preview' ? "bg-yellow-500/20 text-yellow-300" : "bg-purple-500/10 text-purple-200"
-            )}
-          >
-            {profile.experienceMode === 'premium-preview' ? (
-              <Crown className="w-5 h-5 text-yellow-400 fill-current" />
-            ) : (
-              <Crown className="w-5 h-5 opacity-40 text-purple-300" />
-            )}
-          </button>
+          {/* Mobile Center Premium Switch Display Hidden in Version 1.0 */}
 
           <button onClick={() => setIsSidebarOpen(true)} className="p-2 md:hidden"><Menu/></button>
         </div>
@@ -1304,51 +1250,91 @@ export default function ChatScreen({
 
         {/* Messages Container */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-8 md:px-16 space-y-8 scrollbar-hide">
-          {messages.length === 0 && (() => {
-            const sessionLabels: Record<Mode, string> = {
-              student: "Student Success Mode",
-              creator: "Creative Studio Mode",
-              business: "Business Mode",
-              'image-lab': "Image Generation Lab"
-            };
-            const sessionDesc: Record<Mode, string> = {
-              student: "Get detailed notes, exam answers, and summaries.",
-              creator: "Generate viral ideas, hooks, and thumbnails.",
-              business: "Build marketing strategies and ad copy.",
-              'image-lab': "Advanced prompts for stunning AI visuals."
-            };
-            return (
-              <div className="h-full flex flex-col items-center justify-center text-center opacity-40 mt-[-10%] px-6">
-                 <div className="w-20 h-20 bg-purple-accent/10 rounded-[2.5rem] flex items-center justify-center mb-8 border border-purple-accent/20">
-                   {currentMode === 'student' ? <BookOpen className="w-9 h-9 text-purple-accent"/> : 
-                    currentMode === 'creator' ? <Palette className="w-9 h-9 text-purple-accent"/> : 
-                    currentMode === 'business' ? <Briefcase className="w-9 h-9 text-purple-accent"/> : 
-                    <ImageIcon className="w-9 h-9 text-purple-accent"/>}
-                 </div>
-                 <h3 className="text-3xl font-display font-bold">{sessionLabels[currentMode]}</h3>
-                 <p className="text-sm max-w-[18rem] mt-4 leading-relaxed font-medium">{sessionDesc[currentMode]}</p>
-              </div>
-            );
-          })()}
+          {currentMode === 'image-lab' ? (
+            <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-xl mx-auto my-auto select-none">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+                className="glass-card p-8 md:p-12 rounded-[2.5rem] border-purple-accent/30 shadow-2xl relative overflow-hidden flex flex-col items-center justify-center w-full"
+              >
+                {/* Visual subtle glowing background */}
+                <div className="absolute -top-12 -left-12 w-32 h-32 bg-purple-accent/10 rounded-full blur-3xl pointer-events-none" />
+                <div className="absolute -bottom-12 -right-12 w-32 h-32 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+                
+                <div className="w-20 h-20 bg-purple-accent/10 rounded-[2.2rem] flex items-center justify-center mb-8 border border-purple-accent/25 shadow-lg">
+                  <ImageIcon className="w-9 h-9 text-purple-accent animate-pulse" />
+                </div>
+                
+                <h3 className="text-3xl font-display font-black tracking-tight mb-4 flex items-center gap-3 justify-center text-amber-500 dark:text-amber-400">
+                  <span>🚧</span> Coming Soon
+                </h3>
+                
+                <p className="text-lg font-bold mb-4 leading-normal text-page-foreground">
+                  AI Image Generation is currently unavailable in Version 1.0.
+                </p>
+                
+                <p className="text-sm opacity-70 leading-relaxed font-medium mb-4">
+                  We're rebuilding our image engine and this feature will return in the next update.
+                </p>
+                
+                <p className="text-sm opacity-90 leading-relaxed font-semibold mb-8">
+                  Thank you for your patience.
+                </p>
+                
+                <div className="px-4 py-1.5 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-full text-[10px] font-black uppercase tracking-widest opacity-60">
+                  Version 1.0
+                </div>
+              </motion.div>
+            </div>
+          ) : (
+            <>
+              {messages.length === 0 && (() => {
+                const sessionLabels: Record<Mode, string> = {
+                  student: "Student Success Mode",
+                  creator: "Creative Studio Mode",
+                  business: "Business Mode",
+                  'image-lab': "🚧 Coming Soon"
+                };
+                const sessionDesc: Record<Mode, string> = {
+                  student: "Get detailed notes, exam answers, and summaries.",
+                  creator: "Generate viral ideas, hooks, and thumbnails.",
+                  business: "Build marketing strategies and ad copy.",
+                  'image-lab': ""
+                };
+                return (
+                  <div className="h-full flex flex-col items-center justify-center text-center opacity-40 mt-[-10%] px-6">
+                     <div className="w-20 h-20 bg-purple-accent/10 rounded-[2.5rem] flex items-center justify-center mb-8 border border-purple-accent/20">
+                       {currentMode === 'student' ? <BookOpen className="w-9 h-9 text-purple-accent"/> : 
+                        currentMode === 'creator' ? <Palette className="w-9 h-9 text-purple-accent"/> : 
+                        <Briefcase className="w-9 h-9 text-purple-accent"/>}
+                     </div>
+                     <h3 className="text-3xl font-display font-bold">{sessionLabels[currentMode]}</h3>
+                     <p className="text-sm max-w-[18rem] mt-4 leading-relaxed font-medium whitespace-pre-wrap">{sessionDesc[currentMode]}</p>
+                  </div>
+                );
+              })()}
 
-          {messages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              msg={msg}
-              currentMode={currentMode}
-              profile={profile}
-              chats={chats}
-              currentChatId={currentChatId}
-              requestedPdfs={requestedPdfs}
-              onRequestPdf={() => setRequestedPdfs(prev => new Set(prev).add(msg.id))}
-              onSelectPdfPreview={() => setPdfPreviewMessage({ id: msg.id, text: msg.text })}
-              onUpdateProfile={onUpdateProfile}
-              trackFeatureUse={trackFeatureUse}
-              setZoomedImage={setZoomedImage}
-              setShowPremiumRequireModal={setShowPremiumRequireModal}
-              setShowLimitReachedModal={setShowLimitReachedModal}
-            />
-          ))}
+              {messages.map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  msg={msg}
+                  currentMode={currentMode}
+                  profile={profile}
+                  chats={chats}
+                  currentChatId={currentChatId}
+                  requestedPdfs={requestedPdfs}
+                  onRequestPdf={() => setRequestedPdfs(prev => new Set(prev).add(msg.id))}
+                  onSelectPdfPreview={() => setPdfPreviewMessage({ id: msg.id, text: msg.text })}
+                  onUpdateProfile={onUpdateProfile}
+                  trackFeatureUse={trackFeatureUse}
+                  setZoomedImage={setZoomedImage}
+                  setShowPremiumRequireModal={setShowPremiumRequireModal}
+                  setShowLimitReachedModal={setShowLimitReachedModal}
+                />
+              ))}
+            </>
+          )}
 
           {false && messages.map((msg) => (
             <motion.div key={msg.id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className={cn("flex flex-col gap-2", msg.sender === 'user' ? "items-end" : "items-start")}>
@@ -1608,6 +1594,24 @@ export default function ChatScreen({
         {/* Input Navigation Bar */}
         <div className="p-4 md:p-8 bg-transparent max-w-5xl mx-auto w-full z-20 pb-16">
           <AnimatePresence>
+            {currentMode === 'image-lab' && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-3xl p-5 text-center shadow-lg backdrop-blur-md max-w-xl mx-auto"
+              >
+                <p className="text-lg font-bold text-amber-500 mb-1.5 flex items-center justify-center gap-2">
+                  <span>🚧</span> Coming Soon
+                </p>
+                <p className="text-sm font-semibold opacity-90 leading-relaxed">
+                  Image Generation is temporarily unavailable in Version 1.0.
+                </p>
+                <p className="text-xs opacity-60 mt-2 leading-relaxed">
+                  We're currently upgrading our image engine and this feature will return in the next update. Thank you for your patience.
+                </p>
+              </motion.div>
+            )}
             {attachedImage && (
               <motion.div initial={{ opacity: 0, scale: 0.9, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 10 }} className="mb-6 flex items-center gap-4 glass-card p-3 pr-5 w-fit mx-auto relative border-purple-accent/30 shadow-2xl">
                 <img src={attachedImage} className="w-16 h-16 rounded-2xl object-cover border border-purple-accent shadow-lg" alt=""/>
@@ -1621,7 +1625,7 @@ export default function ChatScreen({
           </AnimatePresence>
 
           {/* Daily Premium Trial Selector */}
-          {!profile.isPremium && (
+          {false && !profile.isPremium && (
             <motion.div 
               layout
               initial={{ opacity: 1 }}
@@ -1757,9 +1761,14 @@ export default function ChatScreen({
           <div className="glass-card p-2 md:p-2.5 flex items-end gap-2 shadow-2xl transition-all border-black/5 dark:border-white/5 relative">
             <div className="relative">
               <button 
-                onClick={() => setShowUploadMenu(!showUploadMenu)} 
+                onClick={() => {
+                  if (currentMode !== 'image-lab') {
+                    setShowUploadMenu(!showUploadMenu);
+                  }
+                }} 
+                disabled={currentMode === 'image-lab'}
                 className={cn(
-                  "w-12 h-12 rounded-2xl flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-all opacity-60 hover:opacity-100 group",
+                  "w-12 h-12 rounded-2xl flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 transition-all opacity-60 hover:opacity-100 group disabled:opacity-30 disabled:cursor-not-allowed",
                   showUploadMenu && "bg-purple-accent/10 opacity-100"
                 )}
               >
@@ -1775,21 +1784,24 @@ export default function ChatScreen({
                     className="absolute bottom-full left-0 mb-4 bg-sidebar border border-black/5 dark:border-white/5 rounded-2xl p-2 w-48 shadow-3xl z-30"
                   >
                     <button 
-                      onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
-                      className="w-full flex items-center gap-3 p-3 hover:bg-black/5 dark:hover:bg-white/10 rounded-xl transition-all"
+                      disabled
+                      className="w-full flex items-center justify-between p-3 opacity-40 cursor-not-allowed rounded-xl transition-all"
                     >
-                      <ImageIcon className="w-5 h-5 text-emerald-500" />
-                      <span className="text-sm font-bold">Upload Image</span>
+                      <div className="flex items-center gap-3">
+                        <ImageIcon className="w-5 h-5 text-emerald-500" />
+                        <span className="text-sm font-bold">Upload Image</span>
+                      </div>
+                      <span className="text-[9px] bg-amber-500/15 text-amber-500 px-1.5 py-0.5 rounded font-black uppercase tracking-tight">Soon</span>
                     </button>
                     <button 
-                      onClick={() => { 
-                        setInputText(prev => prev.includes('generate') ? prev : 'Generate image of ' + prev);
-                        setShowUploadMenu(false);
-                      }}
-                      className="w-full flex items-center gap-3 p-3 hover:bg-black/5 dark:hover:bg-white/10 rounded-xl transition-all"
+                      disabled
+                      className="w-full flex items-center justify-between p-3 opacity-40 cursor-not-allowed rounded-xl transition-all"
                     >
-                      <Palette className="w-5 h-5 text-purple-accent" />
-                      <span className="text-sm font-bold">Generate Image 🎨</span>
+                      <div className="flex items-center gap-3">
+                        <Palette className="w-5 h-5 text-purple-accent" />
+                        <span className="text-sm font-bold">Generate Image 🎨</span>
+                      </div>
+                      <span className="text-[9px] bg-amber-500/15 text-amber-500 px-1.5 py-0.5 rounded font-black uppercase tracking-tight">Soon</span>
                     </button>
                     <button 
                       onClick={() => { 
@@ -1825,7 +1837,8 @@ export default function ChatScreen({
             <textarea 
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={(isGeneratingImage || isTyping) ? "Ask next..." : "Ask anything..."}
+              placeholder={currentMode === 'image-lab' ? "Image Generation is temporarily unavailable..." : ((isGeneratingImage || isTyping) ? "Ask next..." : "Ask anything...")}
+              disabled={currentMode === 'image-lab'}
               rows={1}
               onInput={(e) => {
                 const target = e.target as HTMLTextAreaElement;
@@ -1835,30 +1848,50 @@ export default function ChatScreen({
               onKeyDown={(e) => { 
                 if(e.key === 'Enter' && !e.shiftKey) { 
                   e.preventDefault(); 
-                  handleSend(); 
+                  if (currentMode !== 'image-lab') {
+                    handleSend();
+                  } 
                 } 
               }}
-              className="flex-1 bg-transparent border-none outline-none py-3 px-2 text-[15px] font-medium max-h-[200px] scrollbar-hide leading-relaxed placeholder-gray-500/60"
+              className="flex-1 bg-transparent border-none outline-none py-3 px-2 text-[15px] font-medium max-h-[200px] scrollbar-hide leading-relaxed placeholder-gray-500/60 disabled:opacity-40 disabled:cursor-not-allowed"
             />
             
             <div className="flex items-center gap-1.5 pb-1">
               <button 
-                onClick={handleVoiceInput} 
+                onClick={() => {
+                  if (currentMode !== 'image-lab') {
+                    handleVoiceInput();
+                  }
+                }} 
+                disabled={currentMode === 'image-lab'}
                 className={cn(
-                  "w-11 h-11 rounded-2xl flex items-center justify-center transition-all", 
+                  "w-11 h-11 rounded-2xl flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed", 
                   isListening ? "bg-red-500/20 text-red-500 scale-110 shadow-lg" : "hover:bg-black/5 dark:hover:bg-white/10 opacity-60 hover:opacity-100"
                 )}
               >
                 <Mic className={cn("w-5 h-5", isListening && "animate-pulse")}/>
               </button>
-              <button onClick={handleEnhance} className="w-11 h-11 rounded-2xl flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 text-purple-accent/60 group">
+              <button 
+                onClick={() => {
+                  if (currentMode !== 'image-lab') {
+                    handleEnhance();
+                  }
+                }} 
+                disabled={currentMode === 'image-lab'}
+                className="w-11 h-11 rounded-2xl flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/10 text-purple-accent/60 group disabled:opacity-30 disabled:cursor-not-allowed"
+              >
                 <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform"/>
               </button>
               <button 
                 type="button"
-                onClick={handleSend} 
+                onClick={() => {
+                  if (currentMode !== 'image-lab') {
+                    handleSend();
+                  }
+                }} 
+                disabled={currentMode === 'image-lab' || (!inputText.trim() && !attachedImage)}
                 className={cn(
-                  "w-12 h-12 flex-shrink-0 premium-gradient rounded-2xl flex items-center justify-center text-white shadow-xl shadow-purple-accent/20 transition-all active:scale-95",
+                  "w-12 h-12 flex-shrink-0 premium-gradient rounded-2xl flex items-center justify-center text-white shadow-xl shadow-purple-accent/20 transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:scale-95",
                   (!inputText.trim() && !attachedImage) 
                     ? "opacity-30 cursor-not-allowed scale-95" 
                     : "opacity-100 cursor-pointer hover:scale-105"

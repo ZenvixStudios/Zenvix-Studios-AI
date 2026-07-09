@@ -2,5 +2,5 @@
   "name": "Zenvix One",
   "description": "Premium AI-powered assistant for students, creators, and businesses.",
   "requestFramePermissions": ["microphone"],
-  "majorCapabilities": ["AI Chat", "Content Generation", "PDF Export"]
+  "majorCapabilities": ["AI Chat", "Content Generation", "PDF Export", "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
