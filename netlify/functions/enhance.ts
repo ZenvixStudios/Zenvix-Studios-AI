@@ -1,16 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { Handler } from "@netlify/functions";
 
-// Initialize Google GenAI on the server side with correct telemetry headers
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
-});
-
 export const handler: Handler = async (event, context) => {
   // CORS Headers
   const headers = {
@@ -35,6 +25,27 @@ export const handler: Handler = async (event, context) => {
       body: JSON.stringify({ error: "Method Not Allowed" })
     };
   }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        error: "GEMINI_API_KEY environment variable is missing on Netlify. Please add GEMINI_API_KEY to your Netlify Site Settings (under 'Site configuration' > 'Environment variables') using your Google AI Studio API key."
+      })
+    };
+  }
+
+  // Initialize Google GenAI on the server side with correct telemetry headers
+  const ai = new GoogleGenAI({
+    apiKey: apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
 
   try {
     if (!event.body) {

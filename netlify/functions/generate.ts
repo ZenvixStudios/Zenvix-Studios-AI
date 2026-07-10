@@ -1,16 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { Handler } from "@netlify/functions";
 
-// Initialize Google GenAI on the server side with correct telemetry headers
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
-});
-
 const BASE_IDENTITY = "You are Zenvix One, a smart AI assistant designed for students, creators, and businesses, created by Rishikesh Mishra. Always respond with clarity, confidence, and a premium professional tone. NEVER guess the current date or time. If a user asks for the date and you cannot see it in your context, state that you cannot access real-time date/time info. Accuracy is more important than answering. Never act confused about your purpose. You are powered by advanced AI models such as Google Gemini. If asked about your creator, always state: 'I was created by Rishikesh Mishra as part of the Zenvix One AI platform.' When an image is provided, you must analyze its content, describe it in detail, and suggest improvements based on the user's focus (Student, Creator, or Business).";
 
 const SYSTEM_PROMPTS: Record<string, string> = {
@@ -44,6 +34,27 @@ export const handler: Handler = async (event, context) => {
       body: JSON.stringify({ error: "Method Not Allowed" })
     };
   }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({
+        error: "GEMINI_API_KEY environment variable is missing on Netlify. Please add GEMINI_API_KEY to your Netlify Site Settings (under 'Site configuration' > 'Environment variables') using your Google AI Studio API key."
+      })
+    };
+  }
+
+  // Initialize Google GenAI on the server side with correct telemetry headers
+  const ai = new GoogleGenAI({
+    apiKey: apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
 
   try {
     if (!event.body) {
