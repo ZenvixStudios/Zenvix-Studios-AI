@@ -1,45 +1,27 @@
 import { GoogleGenAI } from "@google/genai";
-import { Handler } from "@netlify/functions";
 
-export const handler: Handler = async (event, context) => {
-  // CORS Headers
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json"
-  };
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Content-Type": "application/json"
+};
 
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers,
-      body: ""
-    };
+const jsonResponse = (statusCode: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status: statusCode, headers: CORS_HEADERS });
+
+export default async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("", { status: 200, headers: CORS_HEADERS });
   }
 
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ error: "Method Not Allowed" })
-    };
+  if (req.method !== "POST") {
+    return jsonResponse(405, { error: "Method Not Allowed" });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: "GEMINI_API_KEY environment variable is missing on Netlify. Please add GEMINI_API_KEY to your Netlify Site Settings (under 'Site configuration' > 'Environment variables') using your Google AI Studio API key."
-      })
-    };
-  }
-
-  // Initialize Google GenAI on the server side with correct telemetry headers
+  // Initialize Google GenAI on the server side with correct telemetry headers.
+  // Netlify's AI Gateway injects GEMINI_API_KEY at runtime; no key is set manually.
   const ai = new GoogleGenAI({
-    apiKey: apiKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -48,15 +30,12 @@ export const handler: Handler = async (event, context) => {
   });
 
   try {
-    if (!event.body) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Missing Request Body" })
-      };
+    const bodyText = await req.text();
+    if (!bodyText) {
+      return jsonResponse(400, { error: "Missing Request Body" });
     }
 
-    const { prompt } = JSON.parse(event.body);
+    const { prompt } = JSON.parse(bodyText);
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
       contents: [{ role: 'user', parts: [{ text: `Enhance the following prompt for an AI assistant to make it more detailed and professional, but keep its core meaning. Only return the enhanced prompt text: ${prompt}` }] }],
@@ -65,17 +44,9 @@ export const handler: Handler = async (event, context) => {
       }
     });
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ text: response.text })
-    };
+    return jsonResponse(200, { text: response.text });
   } catch (error: any) {
     console.error("Gemini Netlify Function enhancement error:", error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: error.message || "An error occurred during enhancement." })
-    };
+    return jsonResponse(500, { error: error.message || "An error occurred during enhancement." });
   }
 };

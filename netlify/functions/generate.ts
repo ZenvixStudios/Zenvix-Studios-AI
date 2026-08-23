@@ -1,5 +1,4 @@
 import { GoogleGenAI } from "@google/genai";
-import { Handler } from "@netlify/functions";
 
 const BASE_IDENTITY = "You are Zenvix One, a smart AI assistant designed for students, creators, and businesses, created by Rishikesh Mishra. Always respond with clarity, confidence, and a premium professional tone. NEVER guess the current date or time. If a user asks for the date and you cannot see it in your context, state that you cannot access real-time date/time info. Accuracy is more important than answering. Never act confused about your purpose. You are powered by advanced AI models such as Google Gemini. If asked about your creator, always state: 'I was created by Rishikesh Mishra as part of the Zenvix One AI platform.' When an image is provided, you must analyze its content, describe it in detail, and suggest improvements based on the user's focus (Student, Creator, or Business).";
 
@@ -10,45 +9,28 @@ const SYSTEM_PROMPTS: Record<string, string> = {
   'image-lab': `You are the Zenvix Image Lab specialist. Your sole purpose is to help users generate high-quality images. When a user provides a prompt, enhance it for maximum visual quality and return the generated image. If the user is just describing an idea, turn it into a detailed visual prompt and generate it. Professional, artistic, and visually stunning results are the priority.`
 };
 
-export const handler: Handler = async (event, context) => {
-  // CORS Headers
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Content-Type": "application/json"
-  };
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Content-Type": "application/json"
+};
 
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers,
-      body: ""
-    };
+const jsonResponse = (statusCode: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status: statusCode, headers: CORS_HEADERS });
+
+export default async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("", { status: 200, headers: CORS_HEADERS });
   }
 
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ error: "Method Not Allowed" })
-    };
+  if (req.method !== "POST") {
+    return jsonResponse(405, { error: "Method Not Allowed" });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: "GEMINI_API_KEY environment variable is missing on Netlify. Please add GEMINI_API_KEY to your Netlify Site Settings (under 'Site configuration' > 'Environment variables') using your Google AI Studio API key."
-      })
-    };
-  }
-
-  // Initialize Google GenAI on the server side with correct telemetry headers
+  // Initialize Google GenAI on the server side with correct telemetry headers.
+  // Netlify's AI Gateway injects GEMINI_API_KEY at runtime; no key is set manually.
   const ai = new GoogleGenAI({
-    apiKey: apiKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -57,19 +39,16 @@ export const handler: Handler = async (event, context) => {
   });
 
   try {
-    if (!event.body) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Missing Request Body" })
-      };
+    const bodyText = await req.text();
+    if (!bodyText) {
+      return jsonResponse(400, { error: "Missing Request Body" });
     }
 
-    const { mode, prompt, history = [], imageBase64, isPremium = false, premiumFeature } = JSON.parse(event.body);
+    const { mode, prompt, history = [], imageBase64, isPremium = false, premiumFeature } = JSON.parse(bodyText);
 
     const isPremiumActive = isPremium || (!!premiumFeature && premiumFeature !== 'none');
     const isImageRequest = mode === 'image-lab' || /generate|create|make|draw|show.*image|picture|thumbnail|photo/i.test(prompt);
-    
+
     // Feature Upgrade: Premium users in Student/Business get the image-capable model always to allow visual concept generation
     const isPremiumVisualMode = isPremiumActive && (mode === 'student' || mode === 'business');
 
@@ -79,7 +58,7 @@ export const handler: Handler = async (event, context) => {
 
     // Use gemini-3.1-flash-image for image generation requests, or premium visual modes/diagrams/visual explanations
     // TEMPORARILY DISABLED FOR VERSION 1.0: Route all requests to gemini-3.5-flash to avoid model quota failures
-    const useVisualModel = false; 
+    const useVisualModel = false;
     const modelToUse = "gemini-3.5-flash";
 
     const parts: any[] = [{ text: prompt || (imageBase64 ? "Please analyze this image." : "") }];
@@ -137,20 +116,12 @@ export const handler: Handler = async (event, context) => {
     const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
     const textPart = response.text;
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        text: textPart || (imagePart ? "Here is the image I generated for you:" : undefined),
-        image: imagePart
-      })
-    };
+    return jsonResponse(200, {
+      text: textPart || (imagePart ? "Here is the image I generated for you:" : undefined),
+      image: imagePart
+    });
   } catch (error: any) {
     console.error("Gemini Netlify Function generation error:", error);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: error.message || "An error occurred during generation." })
-    };
+    return jsonResponse(500, { error: error.message || "An error occurred during generation." });
   }
 };
